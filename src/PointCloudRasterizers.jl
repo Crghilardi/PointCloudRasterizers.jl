@@ -12,7 +12,9 @@ and an index for each point pointing to the cell its in."""
 struct PointCloudIndex
 	ds::LazIO.LazDataset
 	counts::GeoArray
-	index::Vector{Int64}
+    index::Vector{Int64}
+    cart_index
+    lin_index
 end
 
 crs(ds::LazIO.LazDataset) = ""  # implement at LazIO.jl
@@ -22,6 +24,7 @@ function index(ds::LazIO.LazDataset, unscaled_cellsizes, unscaled_bbox=bbox(ds),
 	# determine requested raster size
 	cellsizes = (unscaled_cellsizes[1] / ds.header.x_scale_factor, unscaled_cellsizes[2] / ds.header.y_scale_factor)
     indvec = zeros(Int, length(ds))
+    indvec2 = similar([(0,0)], length(ds))
     u_min_x, u_min_y, u_min_z, u_max_x, u_max_y, u_max_z = unscaled_bbox
 
 	# Scale to stored coordinates
@@ -35,12 +38,14 @@ function index(ds::LazIO.LazDataset, unscaled_cellsizes, unscaled_bbox=bbox(ds),
 
     counts = countsgrid(scaled_bbox, cellsizes)
     linind = LinearIndices(counts)
+    cartind = CartesianIndices(counts)
 	@info "Indexing into a grid of $(size(counts))"
 
     @showprogress "Building raster index.." for (i, p) in enumerate(ds)
         (min_x < p.X <= max_x && min_y < p.Y <= max_y ) || continue #&& min_z <= p.Z <= max_z) || continue
         row = Int(fld(p.X - min_x, cellsizes[1])+1)
-        col = Int(fld(p.Y - min_y, cellsizes[2])+1)
+        col = Int(fld(p.Y - min_y, cellsizes[2])+1)       
+        #col = Int(fld(max_y - p.Y, cellsizes[2])+1)
         # height = div(p.Z - min_z, cellsize_z) + 1
 
         # Include points on edge
@@ -49,14 +54,17 @@ function index(ds::LazIO.LazDataset, unscaled_cellsizes, unscaled_bbox=bbox(ds),
         # p.Z == max_z && (height -= 1)
 
         li = linind[row, col]#, height]
+        #ci = cartind[row,col]
+        #indvec2[i] = Tuple(ci)
         @inbounds indvec[i] = li
         @inbounds counts[li] += 1
     end
 
 	affine = GeoArrays.geotransform_to_affine(SVector(u_min_x,unscaled_cellsizes[1],0.,u_min_y,0.,unscaled_cellsizes[2]))
-	ga = GeoArray(reshape(counts, size(counts)..., 1), affine, wkt)
+    ga = GeoArray(reshape(counts, size(counts)..., 1), affine, wkt)
 
-	PointCloudIndex(ds, ga, indvec)
+    #PointCloudIndex(ds, ga, indvec)
+	PointCloudIndex(ds, ga, indvec,indvec2, linind)
 end
 
 """Filter out index on given condition."""
@@ -116,13 +124,13 @@ function Base.reduce(index::PointCloudIndex; field::Symbol=:Z, reducer=minimum, 
         end
     end
 
-	# Scale coordinates back if necessary
-	if field == :Z
-		output = (output .+ index.ds.header.z_offset) .* index.ds.header.z_scale_factor
-	end
+#	# Scale coordinates back if necessary
+#	if field == :Z
+#		output = (output .+ index.ds.header.z_offset) .* index.ds.header.z_scale_factor
+#	end
 
 	ga = GeoArray(output, index.counts.f, index.counts.crs)
-	GeoArrays.flipud!(ga)  # move to GeoArrays
+	#GeoArrays.flipud!(ga)  # move to GeoArrays
 	ga
 end
 
